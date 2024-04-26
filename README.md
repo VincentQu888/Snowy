@@ -1,0 +1,3 @@
+potential names:
+snobot
+snowguy
