@@ -356,13 +356,14 @@ def stem(phrase):
 
 
 #driver code
+print("Starting training...")
 start_time = time.time()
 
 d_output = 2
 d_embedding = 300
 context_window = 100
-heads = 8
-num_epochs = 5
+heads = 4
+num_epochs = 10
 
 model = transformer(d_output, d_embedding, context_window, heads) #num outputs, embedding size, num heads
 training = True
@@ -435,13 +436,40 @@ print(f"Total training time: {elapsed}s")
 
 
 
-#enter in sentence to predict
-stemmed_phrase = stem("Due to anticipated inclement weather not cancelled but it is an inclement weather day today so dont come to school")
-test_doc = nlp(stemmed_phrase) #vectorize phrase
-test_x = [token.vector for token in test_doc] #ensure phrase is in tensor form to plug in
+#testing data
+test_x = [
+    "phrase1",
+    "phraseasdsadsadawda this si a snow day2",
+    "phrase3"
+]
+test_y = [
+    0,
+    1,
+    0
+]
+
+map(stem, test_x) #stem testing data
+test_docs = [nlp(nxt) for nxt in test_x] #vectorize testing data
+
+
+test_x = []
+#for every testing phrase
+for i, doc in enumerate(test_docs):
+    test_x.append([])
+
+    #change token to vector representation
+    for token in doc:
+        test_x[i].append(token.vector)
+        
+
 
 #prediction
-print(model.predict(torch.tensor(np.array(test_x)), False))
+print("\nTESTING OUTPUT:")
+#iterate through each test
+for i, input in enumerate(test_x):
+    pred = model.predict(torch.tensor(np.array(input)), False) #prediction
+    print(f"    Test 1 proba {i+1}: {pred[0]}, expected: {test_y[i]}")
+
 
 
 #code written by vincent qu :)
