@@ -7,7 +7,7 @@ import csv
 
 #parse config info
 config = configparser.ConfigParser()
-config.read('F:\ics4u\projects\capstone\config_info.ini')
+config.read('config_info.ini')
 
 
 #log in to instagram
