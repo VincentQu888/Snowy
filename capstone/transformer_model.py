@@ -1,33 +1,38 @@
+#resources (thank you)
 #https://nlp.seas.harvard.edu/annotated-transformer/
 #https://www.youtube.com/watch?v=eMlx5fFNoYc&vl=en
 
-#suppress warnings
-#import torchtext; torchtext.disable_torchtext_deprecation_warning()
 
-#IMPORTS, ORGNAIZE INTO CATEGORIES WHEN DONE
-import concurrent.futures
+#IMPORTS
+#pytorch imports
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-import math
-import spacy
-
-import multiprocessing
-
+#spacy imports (english model)
 import spacy
 import en_core_web_md
 
+#nltk imports (word stemming and tokenizing)
 from nltk.tokenize import word_tokenize
 from nltk.stem import PorterStemmer
 from nltk.corpus import stopwords
 
-import csv
+#multithreading import
+import concurrent.futures
+
+#other imports
 import numpy as np
+import math
+import csv
+import time
+
+#import torchtext; torchtext.disable_torchtext_deprecation_warning()
 
 
 
+#start of code:
 def gen_pe(d_words, d_embedding):
     '''
         Generates positional encoding matrix to add to input matrix 
@@ -250,6 +255,8 @@ def stem(phrase):
     
 
 #driver code
+start_time = time.time()
+
 d_output = 2
 d_embedding = 300
 context_window = 100
@@ -313,6 +320,8 @@ for epoch in range(num_epochs):
         optimizer.step()
         print(f"    {i+1}/{len(X_train)}, loss: {loss}")
 
+end_time = time.time()
+elapsed = end_time - start_time
 
 
 stemmed_phrase = stem("Due to anticipated inclement weather not cancelled but it is an inclement weather day today so dont come to school")
@@ -320,3 +329,7 @@ test_doc = nlp(stemmed_phrase)
 test_x = [token.vector for token in test_doc]
 
 print(model.predict(torch.tensor(np.array(test_x)), False))
+print(f"Total training time: {elapsed}s")
+
+
+#code written by vincent qu :)
