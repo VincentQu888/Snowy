@@ -59,6 +59,7 @@ def gen_pe(d_words, d_embedding):
 
 
 
+
 def attention(query, key, dropout=None):
     '''
         Computes value matrix result of scaled dot product attention of a query and key vector of two word vectors
@@ -80,6 +81,7 @@ def attention(query, key, dropout=None):
         score = dropout(score)
 
     return score #attention score to be normalized
+
 
 
 
@@ -203,6 +205,7 @@ class multi_head_attn(nn.Module):
         return modified_input
 
 
+        
 
 
 class feed_forward(nn.Module):
@@ -255,6 +258,8 @@ class feed_forward(nn.Module):
 
         #apply unembedding matrix
         return F.softmax(torch.mv(self.unembedding, input), dim=0)
+
+
 
 
 
@@ -319,6 +324,7 @@ class transformer(nn.Module):
 
 
 
+
 def stem(phrase):
     '''
         Stems a string phrase with nltk stemmer
@@ -348,6 +354,7 @@ def stem(phrase):
 
 
 
+
 #driver code
 start_time = time.time()
 
@@ -361,10 +368,10 @@ model = transformer(d_output, d_embedding, context_window, heads) #num outputs, 
 training = True
 
 
+
 #training data sets
 X_train = [] #input
 y_train = [] #expected output
-
 
 #read csv file and append post descriptions to training data
 with open("yrdsb_instagram_posts.csv", encoding="utf8") as csvfile:
@@ -425,6 +432,7 @@ for epoch in range(num_epochs):
 end_time = time.time()
 elapsed = end_time - start_time
 print(f"Total training time: {elapsed}s")
+
 
 
 #enter in sentence to predict
