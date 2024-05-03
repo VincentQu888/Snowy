@@ -123,10 +123,10 @@ class multi_head_attn(nn.Module):
         self.heads = heads 
         self.d_embedding = d_embedding
         self.context_window = context_window
-        self.query_tensor = nn.Parameter(torch.randn(heads, d_embedding//heads, d_embedding)) #d_embedding//heads for now cause it seems like thats what ppl use
-        self.key_tensor = nn.Parameter(torch.randn(heads, d_embedding//heads, d_embedding))
-        self.value_down_tensor = nn.Parameter(torch.randn(heads, d_embedding//heads, d_embedding)) 
-        self.value_up_tensor = nn.Parameter(torch.randn(heads, d_embedding, d_embedding//heads)) 
+        self.query_tensor = nn.Parameter(torch.ones(heads, d_embedding//heads, d_embedding)) #d_embedding//heads for now cause it seems like thats what ppl use
+        self.key_tensor = nn.Parameter(torch.ones(heads, d_embedding//heads, d_embedding))
+        self.value_down_tensor = nn.Parameter(torch.ones(heads, d_embedding//heads, d_embedding)) 
+        self.value_up_tensor = nn.Parameter(torch.ones(heads, d_embedding, d_embedding//heads)) 
         self.dropout = nn.Dropout(p=dropout)
 
 
@@ -147,8 +147,6 @@ class multi_head_attn(nn.Module):
             for i in range(self.heads):
                 input += executor.submit(self.attn_block, input, i, training).result()
 
-        input /= self.heads #avg of modified matrices
-
 
     def attn_block(self, input, i, training):
         '''
@@ -161,10 +159,10 @@ class multi_head_attn(nn.Module):
             Returns:
                 modified_input (FloatTensor): modified input embeddings
         '''
+        modified_input = input.clone()
 
         #loop through each embedding for queries
         for j, E_q in enumerate(input):
-            modified_input = input.clone()
 
             #i assume because multiplying by a vector with requires grad makes it require grad, and we dont want E_q requiring grad or else mult throws error, so need to make copy with no require grad
             with torch.no_grad(): 
@@ -177,9 +175,9 @@ class multi_head_attn(nn.Module):
 
 
             #loop through each embedding in context window for keys
-            l, r = max(j - self.context_window, 0), min(j + self.context_window, len(modified_input)) #left and right boundary for context window
+            l, r = max(j - self.context_window, 0), min(j + self.context_window, len(input)) #left and right boundary for context window
             for k in range(l, r):
-                E_k = modified_input[k] #word embedding for key
+                E_k = input[k] #word embedding for key
 
                 key = torch.mv(self.key_tensor[i], E_k) #mv requires m to come first then v in args
                 values.append(torch.mv(self.value_down_tensor[i], E_k)) #value vector
@@ -213,9 +211,9 @@ class feed_forward(nn.Module):
         Feed forward neural network (fnn) for transformer
 
         Attributes:
-            d_output (int): number of outputs for fnn, 2 for binary classification
-            d_embedding (int): dimension/number of coordinates in each word embedding
-           dropout: dropout rate of neurons in fnn
+            w_1 (nn.linear): first layer of nn
+            w_2 (nn.linear): second layer of nn
+            dropout: dropout rate of neurons in fnn
 
         Methods:
             __init__(self, d_output, d_embedding, dropout=0.1): constructor for object
@@ -227,7 +225,7 @@ class feed_forward(nn.Module):
             Basic constructor, defines all attributes
 
             Args:
-                d_output (int): number of outputs for fnn, 2 for binary classification
+                d_output (int): number of outputs for fnn, 1 for binary classification
                 d_embedding (int): dimension/number of coordinates in each word embedding
                 dropout: dropout rate of neurons in fnn
 
@@ -236,7 +234,8 @@ class feed_forward(nn.Module):
         '''
         
         super(feed_forward, self).__init__()
-        self.unembedding = nn.Parameter(torch.randn(d_output, d_embedding))
+        self.w_1 = nn.Linear(d_embedding, d_output)
+        self.w_2 = nn.Linear(d_output, d_embedding)
         self.dropout = nn.Dropout(dropout)
 
 
@@ -245,19 +244,20 @@ class feed_forward(nn.Module):
             Forward pass of fnn, performs neural network calculations and classifies results
 
             Args:
-                input (FloatTensor): list of word embeddings in input)
+                input (FloatTensor): embedding of last word in sentence
                 dropout: dropout rate of neurons in fnn
 
             Returns:
                 Softmax of tensor output of fnn, tensor[0] = probability of snowday, tensor[1] = probability of not snowday
         '''
 
-        #apply dropout if training
-        if(training):
-            self.unembedding = nn.Parameter(self.dropout(self.unembedding))
-
         #apply unembedding matrix
-        return F.softmax(torch.mv(self.unembedding, input), dim=0)
+        return F.softmax(
+            self.w_2(self.dropout(
+                self.w_1(input).relu()
+            )), 
+            dim=0
+        )
 
 
 
@@ -270,7 +270,7 @@ class transformer(nn.Module):
         Attributes:
             heads (int): number of attention heads in block
             d_embedding (int): dimension/number of coordinates in each word embedding
-            d_output (int): number of outputs for fnn, 2 for binary classification
+            d_output (int): number of outputs for fnn, 1 for binary classification
             context_window (int): size of the attention's context window, i.e. if context_window is x, the window will be x length to the left and right
 
         Methods:
@@ -285,7 +285,7 @@ class transformer(nn.Module):
             Args:
                 heads (int): number of attention heads in block
                 d_embedding (int): dimension/number of coordinates in each word embedding
-                d_output (int): number of outputs for fnn, 2 for binary classification
+                d_output (int): number of outputs for fnn, 1 for binary classification
                 context_window (int): size of the attention's context window, i.e. if context_window is x, the window will be x length to the left and right
 
             Returns:
@@ -359,11 +359,11 @@ def stem(phrase):
 print("Starting training...")
 start_time = time.time()
 
-d_output = 2
+d_output = 1
 d_embedding = 300
 context_window = 100
-heads = 4
-num_epochs = 10
+heads = 8
+num_epochs = 1
 
 model = transformer(d_output, d_embedding, context_window, heads) #num outputs, embedding size, num heads
 training = True
@@ -405,7 +405,7 @@ for i, doc in enumerate(docs):
 #training
 #define loss function and optimizer
 criterion = nn.BCELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001, betas=(0.9, 0.98), eps=1e-7)
+optimizer = optim.Adam(model.parameters(), lr=0.002, betas=(0.9, 0.998), eps=1e-8)
 
 
 #run training epochs
@@ -417,7 +417,7 @@ for epoch in range(num_epochs):
     #loop through training data
     for i, input in enumerate(X_train):
         optimizer.zero_grad() #zero gradients
-        output = model.predict(torch.tensor(np.array(input)), training)[0] #0 is prob that it is snow day, 1 is prob that it isnt
+        output = model.predict(torch.tensor(np.array(input)), training)[0] #[0] is prob that it is snow day
 
         #criterion requires inputs to be tensors, turn into tesnors
         output_tensor = output.clone().detach().requires_grad_(True)
@@ -427,7 +427,7 @@ for epoch in range(num_epochs):
         loss = criterion(output_tensor, expected_tensor)
         loss.backward() #compute gradient loss
         optimizer.step() #update tensors
-        print(f"    {i+1}/{len(X_train)}, loss: {loss}") #training data
+        print(f"    {i+1}/{len(X_train)}, loss: {loss}, pred: {output}") #training data
 
 #training data
 end_time = time.time()
@@ -438,13 +438,13 @@ print(f"Total training time: {elapsed}s")
 
 #testing data
 test_x = [
-    "phrase1",
-    "phraseasdsadsadawda this si a snow day2",
-    "phrase3"
+    "Today is a snow day",
+    "Even though the weather is severe, schools are not cancelled tomorrow",
+    "Last week, the Suppoting East Asian Students (SEAS) affinity group co-hosted an amazing parent engagement evening with the Inclusive School and Community Services team called Understanding the Ontarian Education System - Part 2."
 ]
 test_y = [
-    0,
     1,
+    0,
     0
 ]
 
@@ -468,7 +468,7 @@ print("\nTESTING OUTPUT:")
 #iterate through each test
 for i, input in enumerate(test_x):
     pred = model.predict(torch.tensor(np.array(input)), False) #prediction
-    print(f"    Test 1 proba {i+1}: {pred[0]}, expected: {test_y[i]}")
+    print(f"    Test {i+1} proba: {pred[0]}, expected: {test_y[i]}")
 
 
 
