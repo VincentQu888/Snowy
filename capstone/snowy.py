@@ -169,4 +169,3 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
     #executor.submit(check_posts)
 
 
-#SET IT SO THAT ONLY OWNER CAN SET UP BOT LOL
