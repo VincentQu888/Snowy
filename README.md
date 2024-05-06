@@ -1,4 +1,4 @@
-**WIP, VERY UNFINISHED**
+**MODEL UNDERGOING TRAINING**
 
 For ics4u culminating assigment
 <br/>
