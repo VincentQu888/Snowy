@@ -1,42 +1,51 @@
-import instaloader
-import configparser
-import time
-from typing import Final
-import os
+#file reading imports
 from dotenv import load_dotenv
+import configparser
+import pickle 
 
+#discord imports
 from discord import Intents, Client, Message, app_commands, Interaction, TextChannel, Role, utils
 from discord.ext import commands
 
-import concurrent.futures
+#instagram imports
+import instaloader
 
-import pickle 
-
+#model imports
 from transformer_model import stem, transformer, feed_forward, gen_pe, attention, multi_head_attn
-
+import concurrent.futures
 import spacy
 import en_core_web_md
-
 import torch
 import numpy as np
 
+#misc
+from typing import Final
+import time
+import os
 
 
-
+#load discord token
 load_dotenv()
 TOKEN: Final[str] = os.getenv('DISCORD_TOKEN')
 
 
+#discord bot settings
 intents: Intents = Intents.default()
 intents.message_content = True 
 discord_bot = commands.Bot(command_prefix="!", intents=intents)
 
+
+#storing channels for each server, TEMPORARY WILL CHANGE TO FILE STORAGE
 announcement_channels = {}
 
 
 
+#discord bot events and commands
+
 @discord_bot.event
 async def on_ready() -> None:
+    '''
+    '''
     print(f"{discord_bot.user} is now running")
 
     try:
@@ -49,6 +58,8 @@ async def on_ready() -> None:
 
 @discord_bot.event
 async def on_guild_join(guild):
+    '''
+    '''
     for channel in guild.channels:
         if isinstance(channel, TextChannel):
             await channel.send("Hey there, I'm Snowy! A snow day predictor for YRDSB. Set me up by using the /setinfo command to set up the channel I will announce snow days in, and the role it will ping. For more info, read: _\_\_\_\_")
@@ -60,6 +71,8 @@ async def on_guild_join(guild):
 @discord_bot.tree.command(name="setinfo")
 @app_commands.describe(channel = "Channel Name", role = "Role Name")
 async def setinfo(interaction: Interaction, channel: TextChannel, role: Role):
+    '''
+    '''
     if interaction.user.guild_permissions.administrator:
 
         global announcement_channels
@@ -73,6 +86,8 @@ async def setinfo(interaction: Interaction, channel: TextChannel, role: Role):
 
 @discord_bot.tree.command(name="test")
 async def test(interaction: Interaction):
+    '''
+    '''
     if interaction.user.guild_permissions.administrator:
 
         if interaction.guild in announcement_channels.keys():
@@ -87,6 +102,8 @@ async def test(interaction: Interaction):
 
 
 async def announce(msg):
+    '''
+    '''
     for info in announcement_channels.values():
         await info[0].send(msg)
         
@@ -95,6 +112,8 @@ async def announce(msg):
 
 
 def new_post(bot, last_id):
+    '''
+    '''
     #get posts from yrdsb
     profile = instaloader.Profile.from_username(bot.context, 'yrdsb.schools')
     posts = profile.get_posts()
@@ -112,12 +131,15 @@ def new_post(bot, last_id):
 
 
 def run_bot():
+    '''
+    '''
     discord_bot.run(token=TOKEN)
 
 
 
 def check_posts():
-
+    '''
+    '''
     #parse config info
     config = configparser.ConfigParser()
     config.read('F:\ics4u\projects\capstone\config_info.ini')
