@@ -2,8 +2,10 @@
 from dotenv import load_dotenv
 import configparser
 import pickle 
+import json
 
 #discord imports
+import discord
 from discord import Intents, Client, Message, app_commands, Interaction, TextChannel, Role, utils
 from discord.ext import commands
 
@@ -22,6 +24,7 @@ import numpy as np
 from typing import Final
 import time
 import os
+import asyncio
 
 
 #load discord token
@@ -35,7 +38,7 @@ intents.message_content = True
 discord_bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-#storing channels for each server, TEMPORARY WILL CHANGE TO FILE STORAGE
+#storing channels for each server
 announcement_channels = {}
 
 
@@ -51,6 +54,8 @@ async def on_ready() -> None:
     try:
         synced = await discord_bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
+
+        #await check_posts()
     except Exception as e:
         print(e) 
 
@@ -68,7 +73,7 @@ async def on_guild_join(guild):
 
 
 
-@discord_bot.tree.command(name="setinfo")
+@discord_bot.tree.command(name="setinfo", description="Set info for Snowy to announce snow days in!")
 @app_commands.describe(channel = "Channel Name", role = "Role Name")
 async def setinfo(interaction: Interaction, channel: TextChannel, role: Role):
     '''
@@ -76,22 +81,35 @@ async def setinfo(interaction: Interaction, channel: TextChannel, role: Role):
     if interaction.user.guild_permissions.administrator:
 
         global announcement_channels
-        announcement_channels[interaction.guild] = (channel, role)
-        await interaction.response.send_message(f"Set snow day announcement channel to: {announcement_channels[interaction.guild][0].mention}, and role ping to {role.name}.")
+        announcement_channels[interaction.guild.id] = (channel.id, role.id)
+
+        with open("announcement_channels.pkl", "wb") as file:
+            pickle.dump(announcement_channels, file)
+
+        await interaction.response.send_message(f"Set snow day announcement channel to: {channel.mention}, and role ping to {role.name}.")
         
     else:
         await interaction.response.send_message(f"Sorry {interaction.user.mention}, you don't have permissions to use this command!")
 
 
 
-@discord_bot.tree.command(name="test")
+@discord_bot.tree.command(name="test", description="Sends a message in channel set through /setinfo to test if info is set correctly.")
 async def test(interaction: Interaction):
     '''
     '''
     if interaction.user.guild_permissions.administrator:
+        
+        with open("announcement_channels.pkl", "rb") as file:
+            global announcement_channels
+            announcement_channels = pickle.load(file)
 
-        if interaction.guild in announcement_channels.keys():
-            await announcement_channels[interaction.guild][0].send(f"{announcement_channels[interaction.guild][1].mention} I'm sending messages and snow day announcements in this channel!")
+
+        if interaction.guild.id in announcement_channels.keys():
+            guild = interaction.guild
+            channel = utils.get(guild.channels, id=announcement_channels[guild.id][0])
+            role = utils.get(guild.roles, id=announcement_channels[guild.id][1])
+            
+            await channel.send(f"{role.mention} I'm sending messages and snow day announcements in this channel!")
         else:
             await interaction.response.send_message(f"{interaction.user.mention} info not set :(")
 
@@ -104,9 +122,24 @@ async def test(interaction: Interaction):
 async def announce(msg):
     '''
     '''
-    for info in announcement_channels.values():
-        await info[0].send(msg)
-        
+    with open("announcement_channels.pkl", "rb") as file:
+        global announcement_channels
+        announcement_channels = pickle.load(file)
+
+    for guild in discord_bot.guilds:
+        if guild.id in announcement_channels.keys():
+            channel = utils.get(guild.channels, id=announcement_channels[guild.id][0])
+            role = utils.get(guild.roles, id=announcement_channels[guild.id][1])
+
+            await channel.send(f"{role.mention} {msg}")
+
+
+
+def run_bot():
+    '''
+    '''
+    discord_bot.run(token=TOKEN)
+
 
 
 
@@ -127,13 +160,6 @@ def new_post(bot, last_id):
         
     return False
 
-
-
-
-def run_bot():
-    '''
-    '''
-    discord_bot.run(token=TOKEN)
 
 
 
@@ -186,8 +212,5 @@ nlp = spacy.load("en_core_web_md")
 with open("transformer.pkl", "rb") as file:
     model = pickle.load(file)
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-    executor.submit(run_bot)
-    #executor.submit(check_posts)
 
-
+run_bot()
