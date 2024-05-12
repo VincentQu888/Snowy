@@ -194,12 +194,12 @@ class multi_head_attn(nn.Module):
 
 
             #add delta value to input
-            modified_input[j] += torch.mv(self.value_up_tensor[i], delta_value)
+            modified_input[j] += torch.mv(self.value_up_tensor[i], delta_value).clone().detach() #eats up memory without detaching, i assume since requires grad makes it keep memory
 
             modified_input[j] /= torch.mean(modified_input[j]) #scale down vectors, prevent inflation/deflation of vector magnitudes from constantly adding and multiplying
             modified_input[j] = (modified_input[j] - torch.mean(modified_input[j])) * (1.0 / torch.std(modified_input[j])) + torch.mean(modified_input[j]) #modify standard deviation, POTENTIALLY TWEAK VALUES FOR BETTER RESULTS
 
-        #returns rather than directly modifies because with directly modifying, heads don't run perfectly in sync making the inputs inflate/deflate before they can be scaled down
+        #returns rather than directly modifies because heads run in parallel
         return modified_input
 
 
@@ -361,9 +361,9 @@ start_time = time.time()
 
 d_output = 1
 d_embedding = 300
-context_window = 100
+context_window = 1000
 heads = 8
-num_epochs = 1
+num_epochs = 100
 
 model = transformer(d_output, d_embedding, context_window, heads) #num outputs, embedding size, num heads
 training = True
@@ -405,7 +405,7 @@ for i, doc in enumerate(docs):
 #training
 #define loss function and optimizer
 criterion = nn.BCELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.002, betas=(0.9, 0.998), eps=1e-8)
+optimizer = optim.Adam(model.parameters(), lr=0.002, betas=(0.9, 0.999), eps=1e-8)
 
 
 #run training epochs
