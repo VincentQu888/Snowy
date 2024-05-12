@@ -27,8 +27,8 @@ import numpy as np
 import math
 import csv
 import time
+import pickle
 
-#import torchtext; torchtext.disable_torchtext_deprecation_warning()
 
 
 
@@ -77,7 +77,7 @@ def attention(query, key, dropout=None):
     score = torch.dot(query, key) / math.sqrt(d_k)
 
     #apply dropout for training
-    if(dropout is not None):
+    if dropout is not None:
         score = dropout(score)
 
     return score #attention score to be normalized
@@ -211,8 +211,8 @@ class feed_forward(nn.Module):
         Feed forward neural network (fnn) for transformer
 
         Attributes:
-            w_1 (nn.linear): first layer of nn
-            w_2 (nn.linear): second layer of nn
+            w_1 (nn.linear): first hidden layer of nn
+            w_2 (nn.linear): second hidden layer of nn
             dropout: dropout rate of neurons in fnn
 
         Methods:
@@ -220,13 +220,14 @@ class feed_forward(nn.Module):
             forward(self, input, training): forward pass of fnn
     '''
 
-    def __init__(self, d_output, d_embedding, dropout=0.1):
+    def __init__(self, d_output, d_embedding, d_ff, dropout=0.1):
         '''
             Basic constructor, defines all attributes
 
             Args:
                 d_output (int): number of outputs for fnn, 1 for binary classification
                 d_embedding (int): dimension/number of coordinates in each word embedding
+                d_ff (int): dimension of hidden layer
                 dropout: dropout rate of neurons in fnn
 
             Returns:
@@ -234,8 +235,8 @@ class feed_forward(nn.Module):
         '''
         
         super(feed_forward, self).__init__()
-        self.w_1 = nn.Linear(d_embedding, d_output)
-        self.w_2 = nn.Linear(d_output, d_embedding)
+        self.w_1 = nn.Linear(d_embedding, d_ff)
+        self.w_2 = nn.Linear(d_ff, d_output) 
         self.dropout = nn.Dropout(dropout)
 
 
@@ -248,16 +249,14 @@ class feed_forward(nn.Module):
                 dropout: dropout rate of neurons in fnn
 
             Returns:
-                Softmax of tensor output of fnn, tensor[0] = probability of snowday, tensor[1] = probability of not snowday
+                Score output for each word in sentence, index [0] for word i is probability of snow day suggested by word i, [1] is probability of no snow day
         '''
 
+        if not training:
+            self.dropout = nn.Dropout(0)
+
         #apply unembedding matrix
-        return F.softmax(
-            self.w_2(self.dropout(
-                self.w_1(input).relu()
-            )), 
-            dim=0
-        )
+        return self.w_2(self.dropout(self.w_1(input).relu()))
 
 
 
@@ -271,6 +270,7 @@ class transformer(nn.Module):
             heads (int): number of attention heads in block
             d_embedding (int): dimension/number of coordinates in each word embedding
             d_output (int): number of outputs for fnn, 1 for binary classification
+            d_ff (int): dimension of hidden layer in fnn
             context_window (int): size of the attention's context window, i.e. if context_window is x, the window will be x length to the left and right
 
         Methods:
@@ -278,7 +278,7 @@ class transformer(nn.Module):
             predict(self, input, training): Executes entire model architecture, multiheaded attention, feed forward neural network and positional encoding
     '''
 
-    def __init__(self, d_output, d_embedding, context_window, heads):
+    def __init__(self, d_output, d_embedding, d_ff, context_window, heads):
         '''
             Basic constructor, defines all attributes
 
@@ -286,6 +286,7 @@ class transformer(nn.Module):
                 heads (int): number of attention heads in block
                 d_embedding (int): dimension/number of coordinates in each word embedding
                 d_output (int): number of outputs for fnn, 1 for binary classification
+                d_ff (int): dimension of hidden layer in fnn
                 context_window (int): size of the attention's context window, i.e. if context_window is x, the window will be x length to the left and right
 
             Returns:
@@ -293,7 +294,7 @@ class transformer(nn.Module):
         '''
         
         super(transformer, self).__init__()
-        self.ff = feed_forward(d_output, d_embedding)
+        self.ff = feed_forward(d_output, d_embedding, d_ff)
         self.attn = multi_head_attn(heads, d_embedding, context_window)
         self.gen_pe = gen_pe
 
@@ -320,7 +321,7 @@ class transformer(nn.Module):
 
         #plug sentence into attention then fnn
         self.attn(input, training)
-        return self.ff(input[-1], training)
+        return self.ff(input, training)
 
 
 
@@ -356,120 +357,130 @@ def stem(phrase):
 
 
 #driver code
-print("Starting training...")
-start_time = time.time()
+if __name__ == "__main__":
 
-d_output = 1
-d_embedding = 300
-context_window = 1000
-heads = 8
-num_epochs = 100
+    print("Starting training...")
+    start_time = time.time()
 
-model = transformer(d_output, d_embedding, context_window, heads) #num outputs, embedding size, num heads
-training = True
+    d_output = 2
+    d_embedding = 300
+    d_ff = 2048
+    context_window = 1000
+    heads = 8
+    num_epochs = 5
+
+    model = transformer(d_output, d_embedding, d_ff, context_window, heads) #num outputs, embedding size, num heads
+    training = True
 
 
 
-#training data sets
-X_train = [] #input
-y_train = [] #expected output
+    #training data sets
+    X_train = [] #input
+    y_train = [] #expected output
 
-#read csv file and append post descriptions to training data
-with open("yrdsb_instagram_posts.csv", encoding="utf8") as csvfile:
-    yrdsb_instagram_posts = csv.reader(csvfile) #read csv file and store in variable
+    #read csv file and append post descriptions to training data
+    with open("yrdsb_instagram_posts.csv", encoding="utf8") as csvfile:
+        yrdsb_instagram_posts = csv.reader(csvfile) #read csv file and store in variable
 
+        #for every post
+        for row in yrdsb_instagram_posts:
+            if len(row) != 0: #ensure row is not empty
+                X_train.append(stem(row[0]))
+                y_train.append(int(row[1]))
+
+
+
+    #transform training data to word vectors
+    #tokenize each post
+    nlp = spacy.load("en_core_web_md") #tokenizer
+    docs = [nlp(nxt) for nxt in X_train]
+
+    X_train = [] #empty data set
     #for every post
-    for row in yrdsb_instagram_posts:
-        if len(row) != 0: #ensure row is not empty
-            X_train.append(stem(row[0]))
-            y_train.append(int(row[1]))
+    for i, doc in enumerate(docs):
+        X_train.append([])
+
+        #change token to vector representation
+        for token in doc:
+            X_train[i].append(token.vector)
 
 
 
-#transform training data to word vectors
-#tokenize each post
-nlp = spacy.load("en_core_web_md") #tokenizer
-docs = [nlp(nxt) for nxt in X_train]
-
-X_train = [] #empty data set
-#for every post
-for i, doc in enumerate(docs):
-    X_train.append([])
-
-    #change token to vector representation
-    for token in doc:
-        X_train[i].append(token.vector)
+    #training
+    #define loss function and optimizer
+    criterion = nn.BCELoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.002, betas=(0.9, 0.999), eps=1e-8)
 
 
+    #run training epochs
+    for epoch in range(num_epochs):
+        #training data
+        print(f"EPOCH: {epoch+1}/{num_epochs}")
+        print("    Posts Trained:")
 
-#training
-#define loss function and optimizer
-criterion = nn.BCELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.002, betas=(0.9, 0.999), eps=1e-8)
+        #loop through training data
+        for i, input in enumerate(X_train):
+            optimizer.zero_grad() #zero gradients
+            output = model.predict(torch.tensor(np.array(input)), training)
+            output = F.softmax(torch.max(output, dim=0)[0], dim=0)[0] #max pooling of snow day probability for all words, [0] is for snow day, [1] is for not
+            
 
+            #criterion requires inputs to be tensors, turn into tesnors
+            output_tensor = output.clone().detach().requires_grad_(True)
+            expected_tensor = torch.tensor(y_train[i], dtype=torch.float32, requires_grad=True)
 
-#run training epochs
-for epoch in range(num_epochs):
+            #calculate loss
+            loss = criterion(output_tensor, expected_tensor)
+            loss.backward() #compute gradient loss
+            optimizer.step() #update tensors
+            print(f"    {i+1}/{len(X_train)}, loss: {loss}, pred: {output}") #training data
+
     #training data
-    print(f"EPOCH: {epoch+1}/{num_epochs}")
-    print("    Posts Trained:")
-
-    #loop through training data
-    for i, input in enumerate(X_train):
-        optimizer.zero_grad() #zero gradients
-        output = model.predict(torch.tensor(np.array(input)), training)[0] #[0] is prob that it is snow day
-
-        #criterion requires inputs to be tensors, turn into tesnors
-        output_tensor = output.clone().detach().requires_grad_(True)
-        expected_tensor = torch.tensor(y_train[i], dtype=torch.float32, requires_grad=True)
-
-        #calculate loss
-        loss = criterion(output_tensor, expected_tensor)
-        loss.backward() #compute gradient loss
-        optimizer.step() #update tensors
-        print(f"    {i+1}/{len(X_train)}, loss: {loss}, pred: {output}") #training data
-
-#training data
-end_time = time.time()
-elapsed = end_time - start_time
-print(f"Total training time: {elapsed}s")
+    end_time = time.time()
+    elapsed = end_time - start_time
+    print(f"Total training time: {elapsed}s")
 
 
 
-#testing data
-test_x = [
-    "Today is a snow day",
-    "Even though the weather is severe, schools are not cancelled tomorrow",
-    "Last week, the Suppoting East Asian Students (SEAS) affinity group co-hosted an amazing parent engagement evening with the Inclusive School and Community Services team called Understanding the Ontarian Education System - Part 2."
-]
-test_y = [
-    1,
-    0,
-    0
-]
+    #testing data
+    test_x = [
+        "Today is a snow day",
+        "Even though the weather is severe, schools are not cancelled tomorrow",
+        "Last week, the Suppoting East Asian Students (SEAS) affinity group co-hosted an amazing parent engagement evening with the Inclusive School and Community Services team called Understanding the Ontarian Education System - Part 2."
+    ]
+    test_y = [
+        1,
+        0,
+        0
+    ]
 
-map(stem, test_x) #stem testing data
-test_docs = [nlp(nxt) for nxt in test_x] #vectorize testing data
-
-
-test_x = []
-#for every testing phrase
-for i, doc in enumerate(test_docs):
-    test_x.append([])
-
-    #change token to vector representation
-    for token in doc:
-        test_x[i].append(token.vector)
-        
+    map(stem, test_x) #stem testing data
+    test_docs = [nlp(nxt) for nxt in test_x] #vectorize testing data
 
 
-#prediction
-print("\nTESTING OUTPUT:")
-#iterate through each test
-for i, input in enumerate(test_x):
-    pred = model.predict(torch.tensor(np.array(input)), False) #prediction
-    print(f"    Test {i+1} proba: {pred[0]}, expected: {test_y[i]}")
+    test_x = []
+    #for every testing phrase
+    for i, doc in enumerate(test_docs):
+        test_x.append([])
+
+        #change token to vector representation
+        for token in doc:
+            test_x[i].append(token.vector)
+            
+
+
+    #prediction
+    print("\nTESTING OUTPUT:")
+    #iterate through each test
+    for i, input in enumerate(test_x):
+        pred = model.predict(torch.tensor(np.array(input)), False) #prediction
+        print(f"    Test {i+1} proba: {pred[0]}, expected: {test_y[i]}")
+
+
+    #save model to file
+    with open("transformer.pkl", "wb") as file:
+        model = pickle.dump(model, file)
 
 
 
-#code written by vincent qu :)
+    #code written by vincent qu :)
