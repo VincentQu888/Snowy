@@ -1,7 +1,9 @@
 **MODEL UNDERGOING TRAINING**
 <br/>
 **Snowy**
+<br/>
 The snow day discord bot. 
+<br/>
 <br/>
 For ics4u culminating assigment
 <br/>
