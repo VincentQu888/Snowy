@@ -41,3 +41,6 @@ Reason: Wanted to learn how to make a discord bot and use commands in the bot<br
 Article: Commands (documentation)<br/>
 Source: https://discordpy.readthedocs.io/en/stable/ext/commands/commands.html<br/>
 Reason: Wanted to learn more about discord commands and events to use in application<br/>
+
+Source: ChatGPT
+Reason: Do not have exact prompts, used to clarify on details of transformer logic, training conventions, python syntax, etc.
