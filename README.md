@@ -1,7 +1,8 @@
 **MODEL UNDERGOING TRAINING**
+<br/>
 **Snowy**
 The snow day discord bot. 
-
+<br/>
 For ics4u culminating assigment
 <br/>
 <br/>
@@ -10,4 +11,5 @@ Completely "from scratch" implementation of transformer model for text classific
 <br/>
 <br/>
 The purpose of this project is to create an discord bot to inform students and to practice programming AI.
+<br/>
 Final Product: discord bot to inform yrdsb students of inclement weather day posts from YRDSB Instagram
