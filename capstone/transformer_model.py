@@ -27,7 +27,9 @@ import numpy as np
 import math
 import csv
 import time
+import random
 import pickle
+from sklearn.metrics import accuracy_score
 
 
 
@@ -142,10 +144,16 @@ class multi_head_attn(nn.Module):
         '''
 
         #apply attention for each head
+        head_results = []
+
         #NOTE: Uses multithreading/cpu parallelization rather than gpu since it's running on a school computer with integrated graphics, potential extra performance isn't worth it for this project training overnight anyways
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.heads) as executor:
             for i in range(self.heads):
-                input += executor.submit(self.attn_block, input, i, training).result()
+                head_results.append(executor.submit(self.attn_block, input, i, training).result())
+        
+        #add results to input
+        for result in head_results:
+            input += result
 
 
     def attn_block(self, input, i, training):
@@ -255,7 +263,7 @@ class feed_forward(nn.Module):
         if not training:
             self.dropout = nn.Dropout(0)
 
-        #apply unembedding matrix
+        #apply fnn layers
         return self.w_2(self.dropout(self.w_1(input).relu()))
 
 
@@ -354,6 +362,25 @@ def stem(phrase):
 
 
 
+def shuffle_arrays(a, b):
+    '''
+    Shuffles two arrays in unison
+
+    Args:
+        a (list): first list
+        b (list): second list
+
+    Returns:
+        Randomly shuffled versions of a and b, shuffled in unison
+    '''
+
+    c = list(zip(a, b))
+    random.shuffle(c)
+    a, b = zip(*c)
+
+    return a, b
+
+
 
 
 #driver code
@@ -364,10 +391,11 @@ if __name__ == "__main__":
 
     d_output = 2
     d_embedding = 300
-    d_ff = 2048
+    d_ff = 300
     context_window = 1000
-    heads = 8
-    num_epochs = 5
+    heads = 2
+    num_epochs = 6
+    batch_size = 16
 
     model = transformer(d_output, d_embedding, d_ff, context_window, heads) #num outputs, embedding size, num heads
     training = True
@@ -388,6 +416,8 @@ if __name__ == "__main__":
                 X_train.append(stem(row[0]))
                 y_train.append(int(row[1]))
 
+    print("Shuffling data...") 
+    shuffle_arrays(X_train, y_train) #shuffle training data in unison
 
 
     #transform training data to word vectors
@@ -404,41 +434,73 @@ if __name__ == "__main__":
         for token in doc:
             X_train[i].append(token.vector)
 
+    #cast ints to floats, required for gradient descent
+    y_train = list(map(float, y_train))
 
 
     #training
     #define loss function and optimizer
     criterion = nn.BCELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.002, betas=(0.9, 0.999), eps=1e-8)
+    optimizer = optim.Adam(model.parameters(), lr=0.01, betas=(0.9, 0.998), eps=1e-8)
 
 
     #run training epochs
     for epoch in range(num_epochs):
         #training data
-        print(f"EPOCH: {epoch+1}/{num_epochs}")
-        print("    Posts Trained:")
+        print(f"\nEPOCH: {epoch+1}/{num_epochs}")
+        print("    Batch:")
 
-        #loop through training data
-        for i, input in enumerate(X_train):
-            optimizer.zero_grad() #zero gradients
-            output = model.predict(torch.tensor(np.array(input)), training)
-            output = F.softmax(torch.max(output, dim=0)[0], dim=0)[0] #max pooling of snow day probability for all words, [0] is for snow day, [1] is for not
-            
+        
+        #loop through batches
+        num_batches = math.ceil(len(X_train) / batch_size)
+        start = 0 #training data starting point for each batch
 
-            #criterion requires inputs to be tensors, turn into tesnors
-            output_tensor = output.clone().detach().requires_grad_(True)
-            expected_tensor = torch.tensor(y_train[i], dtype=torch.float32, requires_grad=True)
+        for batch_num in range(num_batches):
+            print(f"    {batch_num+1}/{int(num_batches)}", end="", flush=True) #training data
 
-            #calculate loss
+            #output and expected values for batch
+            output_values = []
+            expected_values = []
+
+
+            #loop through training data
+            for i in range(start, min(start+batch_size, len(X_train))):
+                optimizer.zero_grad() #zero gradients
+                input = torch.tensor(np.array(X_train[i])) #cast input to tensor
+
+                #model pred
+                output = model.predict(input, training)
+
+                #avg pooling of results
+                snow_day_mean = torch.mean(output.t()[0], dim=0)
+                other_mean = torch.mean(output.t()[1], dim=0)
+                output = F.softmax(torch.tensor([snow_day_mean, other_mean]), dim=0)[0].item()
+
+                #append output and expected to batch output values
+                output_values.append(output)
+                expected_values.append(y_train[i])
+                
+
+            #criterion requires args to be tensors, turn into tensors
+            output_tensor = torch.tensor(output_values, requires_grad=True)
+            expected_tensor = torch.tensor(expected_values, requires_grad=True)
+
+            #calculate loss 
             loss = criterion(output_tensor, expected_tensor)
             loss.backward() #compute gradient loss
             optimizer.step() #update tensors
-            print(f"    {i+1}/{len(X_train)}, loss: {loss}, pred: {output}") #training data
+
+
+            output_values_int = (np.array(output_values) >= 0.5).astype(int) #int values for batch output needed for sklearn accuracy pred
+            print(f" - loss: {loss}, accuracy: {accuracy_score(expected_values, output_values_int)}") #training data
+
+            start += batch_size #increment starting pos in training data
+        
 
     #training data
     end_time = time.time()
     elapsed = end_time - start_time
-    print(f"Total training time: {elapsed}s")
+    print(f"Total training time: {elapsed} seconds")
 
 
 
@@ -473,8 +535,9 @@ if __name__ == "__main__":
     print("\nTESTING OUTPUT:")
     #iterate through each test
     for i, input in enumerate(test_x):
-        pred = model.predict(torch.tensor(np.array(input)), False) #prediction
-        print(f"    Test {i+1} proba: {pred[0]}, expected: {test_y[i]}")
+        pred = model.predict(torch.tensor(np.array(input)), False)
+        pred = F.softmax(torch.max(pred, dim=0)[0], dim=0)
+        print(f"    Test {i+1} proba: {pred}, expected: {test_y[i]}")
 
 
     #save model to file
