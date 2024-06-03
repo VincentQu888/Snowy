@@ -125,10 +125,10 @@ class multi_head_attn(nn.Module):
         self.heads = heads 
         self.d_embedding = d_embedding
         self.context_window = context_window
-        self.query_tensor = nn.Parameter(torch.ones(heads, d_embedding//heads, d_embedding)) #d_embedding//heads for now cause it seems like thats what ppl use
-        self.key_tensor = nn.Parameter(torch.ones(heads, d_embedding//heads, d_embedding))
-        self.value_down_tensor = nn.Parameter(torch.ones(heads, d_embedding//heads, d_embedding)) 
-        self.value_up_tensor = nn.Parameter(torch.ones(heads, d_embedding, d_embedding//heads)) 
+        self.query_tensor = nn.Parameter(torch.randn(heads, d_embedding//heads, d_embedding)) #d_embedding//heads for now cause it seems like thats what ppl use
+        self.key_tensor = nn.Parameter(torch.randn(heads, d_embedding//heads, d_embedding))
+        self.value_down_tensor = nn.Parameter(torch.randn(heads, d_embedding//heads, d_embedding))
+        self.value_up_tensor = nn.Parameter(torch.randn(heads, d_embedding, d_embedding//heads))
         self.dropout = nn.Dropout(p=dropout)
 
 
@@ -149,11 +149,13 @@ class multi_head_attn(nn.Module):
         #NOTE: Uses multithreading/cpu parallelization rather than gpu since it's running on a school computer with integrated graphics, potential extra performance isn't worth it for this project training overnight anyways
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.heads) as executor:
             for i in range(self.heads):
-                head_results.append(executor.submit(self.attn_block, input, i, training).result())
+                head_results.append(executor.submit(self.attn_block, input, i, training))
+
+            concurrent.futures.wait(head_results)
         
         #add results to input
         for result in head_results:
-            input += result
+            input += result.result()
 
 
     def attn_block(self, input, i, training):
@@ -177,7 +179,7 @@ class multi_head_attn(nn.Module):
                 E_q_clone = E_q.clone().detach() #word embedding for query
 
             query = torch.mv(self.query_tensor[i], E_q_clone) #create query vector
-            delta_value = torch.zeros(self.d_embedding//self.heads) #delta_value to be added to input embeddings
+            delta_value = torch.zeros(self.d_embedding//self.heads, requires_grad=True) #delta_value to be added to input embeddings
             scores = [] #attn scores
             values = [] #value_down vectors for each embedding
 
@@ -189,23 +191,20 @@ class multi_head_attn(nn.Module):
 
                 key = torch.mv(self.key_tensor[i], E_k) #mv requires m to come first then v in args
                 values.append(torch.mv(self.value_down_tensor[i], E_k)) #value vector
+                scores.append(attention(query, key, dropout=self.dropout if training else None).unsqueeze(0)) #append score to attention scores
 
-                scores.append(attention(query, key, dropout=self.dropout if training else None)) #append score to attention scores
 
-
-            scores = torch.FloatTensor(scores) #convert scores to tensor for softmax
+            values = torch.stack(values, dim=0) #convert lists to tensors
+            scores = torch.cat(scores) 
             weights = F.softmax(scores, dim=0)
 
             #add weighted value vectors to delta_value
             for k in range(len(values)):
-                delta_value += values[k]*weights[k]
-
+                delta_value = torch.add(torch.mul(values[k], weights[k]), delta_value)
+            delta_value = delta_value.clone().detach().requires_grad_(True) #grad calculation doesnt work otherwise
 
             #add delta value to input
-            modified_input[j] += torch.mv(self.value_up_tensor[i], delta_value).clone().detach() #eats up memory without detaching, i assume since requires grad makes it keep memory
-
-            modified_input[j] /= torch.mean(modified_input[j]) #scale down vectors, prevent inflation/deflation of vector magnitudes from constantly adding and multiplying
-            modified_input[j] = (modified_input[j] - torch.mean(modified_input[j])) * (1.0 / torch.std(modified_input[j])) + torch.mean(modified_input[j]) #modify standard deviation, POTENTIALLY TWEAK VALUES FOR BETTER RESULTS
+            modified_input[j] += torch.mv(self.value_up_tensor[i], delta_value) #.clone().detach() #eats up memory without detaching, i assume since requires grad makes it keep memory
 
         #returns rather than directly modifies because heads run in parallel
         return modified_input
@@ -228,7 +227,7 @@ class feed_forward(nn.Module):
             forward(self, input, training): forward pass of fnn
     '''
 
-    def __init__(self, d_output, d_embedding, d_ff, dropout=0.1):
+    def __init__(self, d_input, d_output, d_ff, d_embedding, dropout=0.1):
         '''
             Basic constructor, defines all attributes
 
@@ -243,8 +242,9 @@ class feed_forward(nn.Module):
         '''
         
         super(feed_forward, self).__init__()
-        self.w_1 = nn.Linear(d_embedding, d_ff)
-        self.w_2 = nn.Linear(d_ff, d_output) 
+        self.w_1 = nn.Linear(d_embedding*d_input, d_ff)
+        self.w_2 = nn.Linear(d_ff, d_output)
+         
         self.dropout = nn.Dropout(dropout)
 
 
@@ -264,7 +264,8 @@ class feed_forward(nn.Module):
             self.dropout = nn.Dropout(0)
 
         #apply fnn layers
-        return self.w_2(self.dropout(self.w_1(input).relu()))
+        input = torch.flatten(input)
+        return F.softmax(self.w_2(self.dropout(self.w_1(input).relu())), dim=0)
 
 
 
@@ -286,7 +287,7 @@ class transformer(nn.Module):
             predict(self, input, training): Executes entire model architecture, multiheaded attention, feed forward neural network and positional encoding
     '''
 
-    def __init__(self, d_output, d_embedding, d_ff, context_window, heads):
+    def __init__(self, d_input, d_output, d_embedding, d_ff, context_window, heads):
         '''
             Basic constructor, defines all attributes
 
@@ -302,12 +303,14 @@ class transformer(nn.Module):
         '''
         
         super(transformer, self).__init__()
-        self.ff = feed_forward(d_output, d_embedding, d_ff)
+        self.ff = feed_forward(d_input, d_output, d_ff, d_embedding)
         self.attn = multi_head_attn(heads, d_embedding, context_window)
         self.gen_pe = gen_pe
+        self.d_embedding = d_embedding
+        self.d_input = d_input
 
 
-    def predict(self, input, training):
+    def forward(self, input, training):
         '''
             Executes entire model architecture, multiheaded attention, feed forward neural network and positional encoding
 
@@ -319,13 +322,8 @@ class transformer(nn.Module):
                 Prediction tensor of fnn, tensor[0] = probability of snowday, tensor[1] = probability of not snowday
         '''
 
-        #add positional encoding
-        d_words = input.size()[0]
-        d_embedding = input.size()[1]
-
         #modify input with positional encodings
-        input += self.gen_pe(d_words, d_embedding)
-
+        #input += self.gen_pe(self.d_input, self.d_embedding) (better performance w/o positional encoding)
 
         #plug sentence into attention then fnn
         self.attn(input, training)
@@ -385,19 +383,20 @@ def shuffle_arrays(a, b):
 
 #driver code
 if __name__ == "__main__":
-
+    #torch.autograd.set_detect_anomaly(True)
     print("Starting training...")
     start_time = time.time()
 
+    d_input = 300 #max input size
     d_output = 2
-    d_embedding = 300
-    d_ff = 300
-    context_window = 1000
+    d_embedding = 96
+    d_ff = 16
+    context_window = 10//2 #context window is on both sides
     heads = 2
-    num_epochs = 6
-    batch_size = 16
+    num_epochs = 10
+    batch_size = 32
 
-    model = transformer(d_output, d_embedding, d_ff, context_window, heads) #num outputs, embedding size, num heads
+    model = transformer(d_input, d_output, d_embedding, d_ff, context_window, heads) #num outputs, embedding size, num heads
     training = True
 
 
@@ -416,14 +415,14 @@ if __name__ == "__main__":
                 X_train.append(stem(row[0]))
                 y_train.append(int(row[1]))
 
-    print("Shuffling data...") 
-    shuffle_arrays(X_train, y_train) #shuffle training data in unison
+    X_train, y_train = shuffle_arrays(X_train, y_train) #shuffle training data in unison
 
 
     #transform training data to word vectors
     #tokenize each post
-    nlp = spacy.load("en_core_web_md") #tokenizer
+    nlp = spacy.load("en_core_web_sm") #tokenizer
     docs = [nlp(nxt) for nxt in X_train]
+
 
     X_train = [] #empty data set
     #for every post
@@ -434,6 +433,9 @@ if __name__ == "__main__":
         for token in doc:
             X_train[i].append(token.vector)
 
+        X_train[i] = torch.tensor(np.array(X_train[i])) #cast to tensor for pytorch processes
+
+
     #cast ints to floats, required for gradient descent
     y_train = list(map(float, y_train))
 
@@ -441,60 +443,71 @@ if __name__ == "__main__":
     #training
     #define loss function and optimizer
     criterion = nn.BCELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.01, betas=(0.9, 0.998), eps=1e-8)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-8)
 
 
     #run training epochs
     for epoch in range(num_epochs):
         #training data
-        print(f"\nEPOCH: {epoch+1}/{num_epochs}")
+        print("-----------------------------------------------------------------------")
+        print(f"EPOCH: {epoch+1}/{num_epochs}")
         print("    Batch:")
 
-        
+
         #loop through batches
         num_batches = math.ceil(len(X_train) / batch_size)
         start = 0 #training data starting point for each batch
+        epoch_start_time = time.time()
+        total_accuracy = 0
 
         for batch_num in range(num_batches):
             print(f"    {batch_num+1}/{int(num_batches)}", end="", flush=True) #training data
 
             #output and expected values for batch
+            output_futures = []
             output_values = []
             expected_values = []
 
-
             #loop through training data
-            for i in range(start, min(start+batch_size, len(X_train))):
-                optimizer.zero_grad() #zero gradients
-                input = torch.tensor(np.array(X_train[i])) #cast input to tensor
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                for i in range(start, min(start+batch_size, len(X_train))): #zero gradients
+                    input = X_train[i]
 
-                #model pred
-                output = model.predict(input, training)
+                    if input.shape[0] < d_input:
+                        input = torch.cat((torch.zeros(d_input-input.shape[0], d_embedding), input), dim=0)
 
-                #avg pooling of results
-                snow_day_mean = torch.mean(output.t()[0], dim=0)
-                other_mean = torch.mean(output.t()[1], dim=0)
-                output = F.softmax(torch.tensor([snow_day_mean, other_mean]), dim=0)[0].item()
+                    #model pred
+                    output = executor.submit(model, input, training)
 
-                #append output and expected to batch output values
-                output_values.append(output)
-                expected_values.append(y_train[i])
+                    #append output and expected to batch output values
+                    output_futures.append(output) #unsqueeze for concatenation
+                    expected_values.append(torch.tensor(y_train[i], requires_grad=True).unsqueeze(0))
+
+                #wait for all threads to finish
+                concurrent.futures.wait(output_futures)
+                for future in output_futures:
+                    output_values.append(future.result()[0].unsqueeze(0))
                 
 
             #criterion requires args to be tensors, turn into tensors
-            output_tensor = torch.tensor(output_values, requires_grad=True)
-            expected_tensor = torch.tensor(expected_values, requires_grad=True)
+            output_float = list(map(float, output_values))
+            rounded_output = list(map(round, output_float))
 
             #calculate loss 
-            loss = criterion(output_tensor, expected_tensor)
-            loss.backward() #compute gradient loss
+            accuracy = accuracy_score(list(map(float, expected_values)), rounded_output)
+
+            optimizer.zero_grad()
+            loss = criterion(torch.cat(output_values), torch.cat(expected_values))
+            loss.backward() #backward pass
             optimizer.step() #update tensors
-
-
-            output_values_int = (np.array(output_values) >= 0.5).astype(int) #int values for batch output needed for sklearn accuracy pred
-            print(f" - loss: {loss}, accuracy: {accuracy_score(expected_values, output_values_int)}") #training data
+            print(f" - loss: {loss}, accuracy: {accuracy}") #training data
 
             start += batch_size #increment starting pos in training data
+            total_accuracy += accuracy
+        
+        print("-----------------------------------------------------------------------")
+        print(f"Epoch {epoch+1} total accuracy: {total_accuracy/num_batches}")
+        print(f"Epoch {epoch+1} training time: {time.time() - epoch_start_time} seconds")
         
 
     #training data
@@ -507,13 +520,19 @@ if __name__ == "__main__":
     #testing data
     test_x = [
         "Today is a snow day",
+        "Today is an inclement weather day",
+        "Today is not an inclement weather day",
         "Even though the weather is severe, schools are not cancelled tomorrow",
-        "Last week, the Suppoting East Asian Students (SEAS) affinity group co-hosted an amazing parent engagement evening with the Inclusive School and Community Services team called Understanding the Ontarian Education System - Part 2."
+        "Last week, the Suppoting East Asian Students (SEAS) affinity group co-hosted an amazing parent engagement evening with the Inclusive School and Community Services team called Understanding the Ontarian Education System - Part 2.",
+        "Due to anticipated inclement weather, transportation services are cancelled for tomorrow, Jan 26. Schools will remain open to students. In-person exams will not occur on Jan 26; schools to give more info. Virtual school exams continue as scheduled. More: https://www2.yrdsb.ca/preparing-winter-inclement-weather"
     ]
     test_y = [
         1,
+        1,
         0,
-        0
+        0,
+        0,
+        1
     ]
 
     map(stem, test_x) #stem testing data
@@ -535,8 +554,12 @@ if __name__ == "__main__":
     print("\nTESTING OUTPUT:")
     #iterate through each test
     for i, input in enumerate(test_x):
-        pred = model.predict(torch.tensor(np.array(input)), False)
-        pred = F.softmax(torch.max(pred, dim=0)[0], dim=0)
+        input = torch.tensor(np.array(input))
+
+        if input.shape[0] < d_input:
+            input = torch.cat((input, torch.zeros(d_input-input.shape[0], d_embedding)), dim=0)
+
+        pred = model.predict((input), False)
         print(f"    Test {i+1} proba: {pred}, expected: {test_y[i]}")
 
 
