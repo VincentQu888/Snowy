@@ -140,7 +140,7 @@ class multi_head_attn(nn.Module):
                 input (FloatTensor): list of word embeddings in input
                 training (boolean): whether or not the prediction is used for training or not, enables dropout
             Returns:
-                None, modifies input embeddings directly
+                Modified input embeddings
         '''
 
         #apply attention for each head
@@ -157,6 +157,8 @@ class multi_head_attn(nn.Module):
         for result in head_results:
             input += result.result()
 
+        return input
+
 
     def attn_block(self, input, i, training):
         '''
@@ -167,9 +169,9 @@ class multi_head_attn(nn.Module):
                 i (int): index of query key and value matrix used for attention head
                 training (boolean): whether or not the prediction is used for training or not, enables dropout
             Returns:
-                modified_input (FloatTensor): modified input embeddings
+                modified_input (FloatTensor): modified input embeddings for head
         '''
-        modified_input = input.clone()
+        delta_value_matrix = torch.zeros(input.shape)
 
         #loop through each embedding for queries
         for j, E_q in enumerate(input):
@@ -187,11 +189,12 @@ class multi_head_attn(nn.Module):
             #loop through each embedding in context window for keys
             l, r = max(j - self.context_window, 0), min(j + self.context_window, len(input)) #left and right boundary for context window
             for k in range(l, r):
-                E_k = input[k] #word embedding for key
+                if k != j: #prevent attention of itself
+                    E_k = input[k] #word embedding for key
 
-                key = torch.mv(self.key_tensor[i], E_k) #mv requires m to come first then v in args
-                values.append(torch.mv(self.value_down_tensor[i], E_k)) #value vector
-                scores.append(attention(query, key, dropout=self.dropout if training else None).unsqueeze(0)) #append score to attention scores
+                    key = torch.mv(self.key_tensor[i], E_k) #mv requires m to come first then v in args
+                    values.append(torch.mv(self.value_down_tensor[i], E_k)) #value vector
+                    scores.append(attention(query, key, dropout=self.dropout if training else None).unsqueeze(0)) #append score to attention scores
 
 
             values = torch.stack(values, dim=0) #convert lists to tensors
@@ -204,10 +207,10 @@ class multi_head_attn(nn.Module):
             delta_value = delta_value.clone().detach().requires_grad_(True) #grad calculation doesnt work otherwise
 
             #add delta value to input
-            modified_input[j] += torch.mv(self.value_up_tensor[i], delta_value) #.clone().detach() #eats up memory without detaching, i assume since requires grad makes it keep memory
+            delta_value_matrix[j] += torch.mv(self.value_up_tensor[i], delta_value) #.clone().detach() #eats up memory without detaching, i assume since requires grad makes it keep memory
 
         #returns rather than directly modifies because heads run in parallel
-        return modified_input
+        return delta_value_matrix
 
 
         
@@ -232,9 +235,10 @@ class feed_forward(nn.Module):
             Basic constructor, defines all attributes
 
             Args:
-                d_output (int): number of outputs for fnn, 1 for binary classification
+                d_input (int): length of input sentence, currently set to 300
+                d_output (int): number of outputs for fnn, currently set to 2
+                d_ff (int): dimension of hidden layer                
                 d_embedding (int): dimension/number of coordinates in each word embedding
-                d_ff (int): dimension of hidden layer
                 dropout: dropout rate of neurons in fnn
 
             Returns:
@@ -253,8 +257,8 @@ class feed_forward(nn.Module):
             Forward pass of fnn, performs neural network calculations and classifies results
 
             Args:
-                input (FloatTensor): embedding of last word in sentence
-                dropout: dropout rate of neurons in fnn
+                input (FloatTensor): matrix of word embeddings in input sentence
+                training (boolean): whether or not the prediction is used for training or not, enables dropout
 
             Returns:
                 Score output for each word in sentence, index [0] for word i is probability of snow day suggested by word i, [1] is probability of no snow day
@@ -277,10 +281,8 @@ class transformer(nn.Module):
 
         Attributes:
             heads (int): number of attention heads in block
+            d_input (int): length of input sentence, currently set to 300
             d_embedding (int): dimension/number of coordinates in each word embedding
-            d_output (int): number of outputs for fnn, 1 for binary classification
-            d_ff (int): dimension of hidden layer in fnn
-            context_window (int): size of the attention's context window, i.e. if context_window is x, the window will be x length to the left and right
 
         Methods:
             __init__(self, d_output, d_embedding, context_window, heads): constructor for object
@@ -292,11 +294,12 @@ class transformer(nn.Module):
             Basic constructor, defines all attributes
 
             Args:
-                heads (int): number of attention heads in block
-                d_embedding (int): dimension/number of coordinates in each word embedding
+                d_input (int): length of input sentence, currently set to 300
                 d_output (int): number of outputs for fnn, 1 for binary classification
+                d_embedding (int): dimension/number of coordinates in each word embedding
                 d_ff (int): dimension of hidden layer in fnn
                 context_window (int): size of the attention's context window, i.e. if context_window is x, the window will be x length to the left and right
+                heads (int): number of attention heads in block
 
             Returns:
                 None
@@ -326,7 +329,7 @@ class transformer(nn.Module):
         #input += self.gen_pe(self.d_input, self.d_embedding) (better performance w/o positional encoding)
 
         #plug sentence into attention then fnn
-        self.attn(input, training)
+        input = self.attn(input, training)
         return self.ff(input, training)
 
 
@@ -390,11 +393,11 @@ if __name__ == "__main__":
     d_input = 300 #max input size
     d_output = 2
     d_embedding = 96
-    d_ff = 16
-    context_window = 10//2 #context window is on both sides
-    heads = 2
-    num_epochs = 10
-    batch_size = 32
+    d_ff = 20
+    context_window = 4//2 #context window is on both sides
+    heads = 1
+    num_epochs = 5
+    batch_size = 16
 
     model = transformer(d_input, d_output, d_embedding, d_ff, context_window, heads) #num outputs, embedding size, num heads
     training = True
@@ -440,6 +443,13 @@ if __name__ == "__main__":
     y_train = list(map(float, y_train))
 
 
+    #create validation data sets
+    X_val = X_train[1500:]
+    y_val = y_train[1500:]
+    X_train = X_train[:1500]
+    y_train = y_train[:1500]
+
+
     #training
     #define loss function and optimizer
     criterion = nn.BCELoss()
@@ -477,7 +487,7 @@ if __name__ == "__main__":
                         input = torch.cat((torch.zeros(d_input-input.shape[0], d_embedding), input), dim=0)
 
                     #model pred
-                    output = executor.submit(model, input, training)
+                    output = executor.submit(model, input.clone().detach(), training) #cloned so input doesnt get modified multiple times through epochs
 
                     #append output and expected to batch output values
                     output_futures.append(output) #unsqueeze for concatenation
@@ -504,69 +514,37 @@ if __name__ == "__main__":
 
             start += batch_size #increment starting pos in training data
             total_accuracy += accuracy
+
+
+        #validation data:
+        val_accuracy = 0
+        for i in range(len(X_val)): 
+            input = X_val[i]
+
+            if input.shape[0] < d_input:
+                input = torch.cat((torch.zeros(d_input-input.shape[0], d_embedding), input), dim=0)
+
+            #model pred
+            output = model(input.clone(), training)
+            val_accuracy += accuracy_score([round(float(output[0]))], [y_val[i]])
         
+
         print("-----------------------------------------------------------------------")
-        print(f"Epoch {epoch+1} total accuracy: {total_accuracy/num_batches}")
+        print(f"Epoch {epoch+1} training accuracy: {total_accuracy/num_batches}")
+        print(f"Epoch {epoch+1} validation accuracy: {val_accuracy/len(X_val)}")
         print(f"Epoch {epoch+1} training time: {time.time() - epoch_start_time} seconds")
         
+
 
     #training data
     end_time = time.time()
     elapsed = end_time - start_time
     print(f"Total training time: {elapsed} seconds")
-
-
-
-    #testing data
-    test_x = [
-        "Today is a snow day",
-        "Today is an inclement weather day",
-        "Today is not an inclement weather day",
-        "Even though the weather is severe, schools are not cancelled tomorrow",
-        "Last week, the Suppoting East Asian Students (SEAS) affinity group co-hosted an amazing parent engagement evening with the Inclusive School and Community Services team called Understanding the Ontarian Education System - Part 2.",
-        "Due to anticipated inclement weather, transportation services are cancelled for tomorrow, Jan 26. Schools will remain open to students. In-person exams will not occur on Jan 26; schools to give more info. Virtual school exams continue as scheduled. More: https://www2.yrdsb.ca/preparing-winter-inclement-weather"
-    ]
-    test_y = [
-        1,
-        1,
-        0,
-        0,
-        0,
-        1
-    ]
-
-    map(stem, test_x) #stem testing data
-    test_docs = [nlp(nxt) for nxt in test_x] #vectorize testing data
-
-
-    test_x = []
-    #for every testing phrase
-    for i, doc in enumerate(test_docs):
-        test_x.append([])
-
-        #change token to vector representation
-        for token in doc:
-            test_x[i].append(token.vector)
-            
-
-
-    #prediction
-    print("\nTESTING OUTPUT:")
-    #iterate through each test
-    for i, input in enumerate(test_x):
-        input = torch.tensor(np.array(input))
-
-        if input.shape[0] < d_input:
-            input = torch.cat((input, torch.zeros(d_input-input.shape[0], d_embedding)), dim=0)
-
-        pred = model.predict((input), False)
-        print(f"    Test {i+1} proba: {pred}, expected: {test_y[i]}")
-
+    
 
     #save model to file
     with open("transformer.pkl", "wb") as file:
         model = pickle.dump(model, file)
-
 
 
     #code written by vincent qu :)
