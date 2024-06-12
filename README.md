@@ -1,5 +1,3 @@
-**MODEL UNDERGOING TRAINING**
-<br/>
 **Snowy**
 <br/>
 The snow day discord bot. 
