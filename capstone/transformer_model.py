@@ -326,7 +326,7 @@ class transformer(nn.Module):
         '''
 
         #modify input with positional encodings
-        #input += self.gen_pe(self.d_input, self.d_embedding) (better performance w/o positional encoding)
+        #input += self.gen_pe(self.d_input, self.d_embedding) 
 
         #plug sentence into attention then fnn
         input = self.attn(input, training)
@@ -525,7 +525,7 @@ if __name__ == "__main__":
                 input = torch.cat((torch.zeros(d_input-input.shape[0], d_embedding), input), dim=0)
 
             #model pred
-            output = model(input.clone(), training)
+            output = model(input.clone(), False)
             val_accuracy += accuracy_score([round(float(output[0]))], [y_val[i]])
         
 
@@ -543,7 +543,7 @@ if __name__ == "__main__":
     
 
     #save model to file
-    with open("transformer.pkl", "wb") as file:
+    with open("transformerth.pkl", "wb") as file:
         model = pickle.dump(model, file)
 
 
