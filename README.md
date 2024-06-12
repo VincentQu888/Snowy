@@ -16,3 +16,5 @@ Final Product/Goal: discord bot to inform yrdsb students of inclement weather da
 <br/>
 <br/>
 Languages used: Python
+<br/>
+Other libraries: Pickle, discord.py, asyncio, instaloader, dotenv, configparser, numpy, concurrent, sklearn
