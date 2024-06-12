@@ -8,6 +8,7 @@ import json
 import discord
 from discord import Intents, Client, Message, app_commands, Interaction, TextChannel, Role, utils
 from discord.ext import commands
+import asyncio
 
 #instagram imports
 import instaloader
@@ -24,7 +25,6 @@ import numpy as np
 from typing import Final
 import time
 import os
-import asyncio
 
 
 #load discord token
@@ -60,10 +60,9 @@ async def on_ready() -> None:
     print(f"{discord_bot.user} is now running")
 
     try:
+        discord_bot.loop.create_task(check_posts())
         synced = await discord_bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
-
-        #await check_posts() #run bot process to wait for new posts
     except Exception as e:
         print(e) 
 
@@ -229,7 +228,7 @@ def new_post(bot, last_id):
 
 
 
-def check_posts():
+async def check_posts():
     '''
         Indefinitely running function to check if new posts have been made, classify them, and send announcements if posts are deemed as indicating a snow day
         
@@ -245,7 +244,7 @@ def check_posts():
     config.read('F:\ics4u\projects\capstone\config_info.ini')
 
 
-    while True: #run indefinitely
+    while not discord_bot.is_closed(): #run indefinitely
         insta_bot = instaloader.Instaloader()
         insta_bot.login(config['instagram']['username'], config['instagram']['password'])
 
@@ -258,21 +257,44 @@ def check_posts():
             test_x = [
                 post.caption.replace(",", "")
             ]
+            
+            
+            #nlp processing
+            d_input = 300
+            d_embedding = 96
+            
+            nlp = spacy.load("en_core_web_sm")
+            map(stem, test_x) #stem testing data
+            test_docs = [nlp(nxt) for nxt in test_x] #vectorize testing data
 
-            map(stem, test_x) #stem
-            test_doc = nlp(test_x) #vectorize 
 
-            test_x = [token.vector for token in test_doc]
+            test_x = []
+            #for every testing phrase
+            for i, doc in enumerate(test_docs):
+                test_x.append([])
+
+                #change token to vector representation
+                for token in doc:
+                    test_x[i].append(token.vector)
+
+                test_x[i] = torch.tensor(np.array(test_x[i]))
                     
 
-            #prediction
-            pred = model.predict(torch.tensor(np.array(input)), False) #prediction
-            
-            if True: #some condition, depends on model performance
-                announce(f"{pred[0]}")
+            #plug into model
+            input = test_x[0]
+
+            if input.shape[0] < d_input:
+                input = torch.cat((torch.zeros(d_input-input.shape[0], d_embedding), input), dim=0)
+            else: 
+                input = input[:d_input]
+
+            #model pred
+            pred = model(input.clone(), False)[0]
+            if pred > 0.4: #buffer from 0.5 for error
+                await announce(f"New YRDSB post potentially indicating a snow day! {post.url}")
 
 
-        time.sleep(60*10)
+        await asyncio.sleep(60*10)
 
 
 
