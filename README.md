@@ -2,7 +2,7 @@
 Invite Link: https://discord.com/oauth2/authorize?client_id=1236106858922508319&permissions=8&integration_type=0&scope=bot 
 <br/>
 <br/>
-Completely from scratch implementation of transformer model for text classification (same architecture as GPT-4 and other LLMs), only using PyTorch matrix multiplication and training functions and Spacy + NLTK english processing.
+Completely from scratch implementation of <a href="https://github.com/VincentQu888/Snowy/blob/main/capstone/transformer_model.py">transformer model</a> for text classification (same architecture as GPT-4 and other LLMs), only using PyTorch matrix multiplication and training functions and Spacy + NLTK english processing.
 <br/>
 <br/>
 The purpose of this project is to create an discord bot to inform students and to practice programming AI.
